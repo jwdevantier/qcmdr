@@ -1,0 +1,8 @@
+bin/
+*.fasl
+throwaway/
+*.pid
+*.serial
+qcmdr.lisp
+qcmdr.data
+.vscode
