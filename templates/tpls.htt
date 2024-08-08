@@ -1,0 +1,394 @@
+% @component ScriptDirVal
+$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+% @end
+
+% @component MutagenBinWrap
+#!/usr/bin/env sh
+SCRIPT_DIR={{@ ScriptDirVal {} }}
+
+export MUTAGEN_DATA_DIRECTORY="${SCRIPT_DIR}/{{ctx.data_dir_fpath}}"
+export MUTAGEN_SSH_PATH="${SCRIPT_DIR}/{{ctx.ssh_bin_fpath}}"
+exec mutagen $*
+% @end
+
+% @component Config
+% @code
+local all = ctx.all
+if all.ControlPath == nil then
+  error("ControlPath must be defined in SSH config")
+end
+if all.ControlMaster == nil then
+  all.ControlMaster = "auto"
+end
+if all.ControlPersist == nil then
+  all.ControlPersist = "10m"
+end
+% @end
+Host *
+% for key, value in pairs(all) do
+  {{key}} = {{value}}
+% end
+% for _, host in ipairs(ctx.hosts) do
+
+Host {{host.name}}
+  % for key, value in pairs(host.ssh) do
+  {{key}} = {{value}}
+	% end
+% end
+% @end
+
+% -- for generating both `scp` and `ssh` wrappers
+% @component BinWrap
+#!/usr/bin/env sh
+exec {{ctx.bin}} -F {{ctx.conf_fpath}} $*
+% @end
+
+% @component TestValidPid
+[[ "${{ctx.var}}" =~ ^[0-9]+$ ]] && [[ "${{ctx.var}}" -gt 1 ]]
+% @end
+
+% @component GetPid
+% @code
+if ctx.var == nil then
+  error("must provide `var`")
+end
+if ctx.pid_fpath == nil then
+  error("must provide `pid_fpath`")
+end
+% @end
+local {{ctx.var}}
+if [ ! -f "{{ctx.pid_fpath}}" ]; then
+    {{ctx.var}}=-1
+else
+    {{ctx.var}}=$(cat "{{ctx.pid_fpath}}")
+fi
+% @end
+
+% @component CheckLoginFn
+check_login() {
+    local serial_fpath="$1"
+    local timeout="$2"
+    local start_time=$(date +%s)
+
+    while true; do
+        if [ -f "$serial_fpath" ] && grep -q "login:" "$serial_fpath"; then
+            echo -e "\nLogin prompt detected!"
+            return 0
+        fi
+        
+        current_time=$(date +%s)
+        elapsed=$((current_time - start_time))
+        
+        if [ $elapsed -ge $timeout ]; then
+            echo -e "\nTimeout reached. Login prompt not found."
+            return 1
+        else
+            echo -n "."
+        fi
+        
+        sleep 1
+    done
+}
+% @end
+
+% @component SshShutdownFn
+ssh_shutdown() {
+  local host="$1"
+  local timeout="$2"
+  local pidfile="$3"
+  local start_time=$(date +%s)
+
+  {{@ GetPid {var="pid", pid_fpath="${pidfile}"} }}
+  if [[ "$pid" -eq -1 ]]; then
+      echo "no PIDFILE, cannot shut down host using SSH"
+      return 2
+  fi
+  if !({{@ TestValidPid {var = "pid"} }}); then
+      echo -e "PIDFILE invalid!"
+      return 2
+  fi
+
+  echo "Testing SSH connectivity..."
+  timeout 12s ssh -F "${SSH_CONF_FPATH}" -o BatchMode=yes -o ConnectTimeout=10 "${host}" true
+  if [ $? -ne 0 ]; then
+      echo "failed to connect via SSH, skipping SSH shutdown"
+      return 2
+  fi
+
+  echo "Sending 'poweroff' to ${host}..."
+  timeout 12s ssh -F "${SSH_CONF_FPATH}" -o BatchMode=yes -o ConnectTimeout=10 "$host" poweroff
+  if [[ $? -ne 255 ]] && [[$? -ne 0 ]]; then
+      echo "SSH poweroff request failed, $?"
+      return 2
+  fi
+
+  while true; do
+      if ! kill -0 $PID 2>/dev/null; then
+          echo -e "\nMachine powered off!"
+          return 0
+      fi
+
+      current_time=$(date +%s)
+      elapsed=$((current_time - start_time))
+      if [ $elapsed -ge $timeout ]; then
+          echo -e "\nTimeout reached. Login prompt not found."
+          return 1
+      else
+          echo -n "."
+      fi
+        
+      sleep 1
+  done
+}
+% @end
+
+% @component QcmdrScript
+#!/usr/bin/env bash
+
+SCRIPT_DIR={{@ ScriptDirVal {} }}
+cd "${SCRIPT_DIR}"
+
+MUTAGEN="${SCRIPT_DIR}/mutagen"
+
+SSH_CONF_FPATH="${SCRIPT_DIR}/{{ ctx.ssh_conf_fpath }}"
+
+{{@ CheckLoginFn {} }}
+
+{{@ SshShutdownFn {} }}
+
+ssh_conn_ok() {
+    local hostname="$1"
+    timeout 12s ssh -F /path/to/ssh-conf -o BatchMode=yes -o ConnectTimeout=10 "$hostname" true >/dev/null 2>&1
+    return $?
+}
+
+# Function to source all ctrl.sh files
+source_ctrl_files() {
+    for dir in "$SCRIPT_DIR"/vm.*; do
+        if [ -d "$dir" ] && [ -f "$dir/ctrl.sh" ]; then
+            source "$dir/ctrl.sh"
+        fi
+    done
+}
+
+# Function to check if a VM exists
+vm_exists() {
+    local vm_name="$1"
+    [ -d "$SCRIPT_DIR/vm.$vm_name" ] && [ -f "$SCRIPT_DIR/vm.$vm_name/ctrl.sh" ]
+}
+
+# Main command handler
+handle_command() {
+    local command="$1"
+    local vm_name="$2"
+
+    case "$command" in
+        status)
+            if [ -z "$vm_name" ]; then
+                for dir in "$SCRIPT_DIR"/vm.*; do
+                    if [ -d "$dir" ]; then
+                        vm=${dir#"$SCRIPT_DIR"/vm.}
+                        if type "vm_${vm}_status" &>/dev/null; then
+                            echo ""
+                            "vm_${vm}_status"
+                            echo
+                        else
+                            echo "Status function for $vm not found"
+                        fi
+                    fi
+                done
+            elif vm_exists "$vm_name"; then
+                if type "vm_${vm_name}_status" &>/dev/null; then
+                    "vm_${vm_name}_status"
+                else
+                    echo "Status function for $vm_name not found"
+                fi
+            else
+                echo "VM $vm_name not found"
+            fi
+            ;;
+        scp)
+            shift 1
+            exec scp -F "${SSH_CONF_FPATH}" $*
+            ;;
+        ssh)
+            if [ -z "$vm_name" ]; then
+                echo "Usage: $(basename $0) $command <vm name>"
+                exit 1
+            elif vm_exists "$vm_name"; then
+                shift 2
+                exec ssh -F "${SSH_CONF_FPATH}" $vm_name $*
+            else
+                echo "VM $vm_name not found"
+                return 3
+            fi
+            ;;
+        start|stop)
+            if [ -z "$vm_name" ]; then
+                echo "Usage: $(basename $0) $command <vm name>"
+                exit 1
+            elif vm_exists "$vm_name"; then
+                if type "vm_${vm_name}_${command}" &>/dev/null; then
+                    "vm_${vm_name}_${command}"
+                else
+                    echo "${command^} function for $vm_name not found"
+                fi
+            else
+                echo "VM $vm_name not found"
+                return 3
+            fi
+            ;;
+        *)
+            echo "Usage: $0 {status|start|stop} [vm_name]"
+            exit 1
+            ;;
+    esac
+}
+
+# Source all ctrl.sh files
+source_ctrl_files
+
+# Check arguments and call the command handler
+if [ $# -eq 0 ] || [ $# -lt 1 ]; then
+    echo ""
+    echo "Usage:"
+    echo "   status [<vm name>]   - list status of one or all VMs"
+    echo "   start <vm name>      - start VM (if not running)"
+    echo "   stop <vm name>       - stop VM, either nicely by SSH or harshly by kill"
+    echo "   ssh <vm name>        - SSH into VM"
+    echo "   scp args...          - scp files to or from VM"
+    exit 1
+fi
+
+handle_command "$@"
+
+% @end
+
+% @component CaptureSshError
+local _ret=$?
+local {{ctx.var}}=""
+if [ $_ret -eq 124 ]; then
+    {{ctx.var}}="timed out"
+elif [ $_ret -eq 255 ]; then
+    {{ctx.var}}="connection failed"
+elif [ $_ret -ne 0 ]; then
+    {{ctx.var}}="SSH command failed with status: $_ret"
+fi
+% @end
+
+% @component TestStrEmpty
+[[ -z "${{ctx.var}}" ]]
+% @end
+
+% @component VmScript
+#!/usr/bin/env bash
+
+vm_{{ctx.name}}_start () {
+    local pid_fpath="{{ctx.pid_fpath}}"
+    if [ -f "${pid_fpath}" ] && kill -0 $(cat "${pid_fpath}") 2>/dev/null; then
+        echo "ERROR - PIDFILE (${pid_fpath}) for VM '{{ctx.name}}' points to a living process, aborting!"
+        exit 2
+    fi
+    
+    set -x
+
+    {{ctx.qemu_bin_fpath}} \
+    % for i, arg in ipairs(ctx.qemu_args) do
+      % local sep = i ~= #ctx.qemu_args and ' \\' or ''
+      {{arg}}{{sep}}
+    % end
+    local _ret=$?
+
+    set +x
+
+    if [[ $_ret -ne 0 ]]; then
+      echo -e "\nError launching QEMU, drop the '-daemonize' argument to see what is wrong with the configuration."
+      return 3
+    fi
+
+    # Check for login prompt
+    check_login "{{ctx.serial_fpath}}" {{ctx.login_timeout or 120}}
+
+    % if ctx.sync_enable then
+    $MUTAGEN sync terminate --label-selector "{{ctx.name}}"
+
+    # TODO: don't hard-code mutagen sync mode (?)
+    % for _, sync in ipairs(ctx.sync) do
+    % @code
+    local ignore
+    if sync.ignore then
+      ignore = ' -i "' .. table.concat(sync.ignore, ",") .. '"'
+    else
+      ignore = ""
+    end
+
+    local ignore_vcs = ""
+    if sync.ignore_vcs then
+      ignore_vcs = " --ignore-vcs"
+    end
+    % @end
+    $MUTAGEN sync create -m one-way-replica --label "{{ctx.name}}" "{{sync.source}}" "{{sync.dest}}"{{ignore}}{{ignore_vcs}}
+    if [[ $? -ne 0 ]]; then
+        echo "failed to sync \"{{sync.source}}\", aborting!"
+        vm_{{ctx.name}}_stop
+    fi
+    % end
+    % end
+
+    % -- TODO: IF mutagen, start calling relevant commands
+    % -- TODO: PREFIX script with checks for all the binaries we know we use
+    % --       grep, kill, date, (if mutagen, mutagen)
+}
+
+vm_{{ctx.name}}_status () {
+    {{@ GetPid {var="pid", pid_fpath=ctx.pid_fpath} }}
+    local status
+    if {{@ TestValidPid {var = "pid"} }}; then
+      status="running"
+      timeout 12s ssh -F {{ctx.ssh_conf_fpath}} -o BatchMode=yes -o ConnectTimeout=10 {{ctx.name}} true
+      {{@ CaptureSshError {var="ssh_status"} }}
+      if {{@ TestStrEmpty {var="ssh_status"} }}; then
+        ssh_status="OK"
+      fi
+    else
+      status="dead"
+      local ssh_status="N/A"
+    fi
+
+    echo "Host: {{ctx.name}}"
+    echo "  Status: $status"
+    echo "     SSH: $ssh_status"
+    % -- TODO: duplication here.
+    % -- Consider not sending ctx.serial_fpath and just mandating this in script
+    % -- (And same with monitor and pid)
+    echo "  Serial: {{@ ScriptDirVal {} }}/serial"
+}
+
+vm_{{ctx.name}}_stop () {
+    % -- TODO: iff mutagen support, try to terminate sessions here
+    % if ctx.sync_enable then
+    $MUTAGEN sync terminate --label-selector "{{ctx.name}}"
+
+    % end
+    {{@ GetPid {var="pid", pid_fpath=ctx.pid_fpath} }}
+
+    if [[ "$pid" -lt 1 ]]; then
+        echo "No PID, cannot kill VM"
+        return 2
+    fi
+
+    if kill -0 "$pid"; then
+        ssh_shutdown "{{ctx.name}}" {{ctx.timeout or 120}} "{{ctx.pid_fpath}}" && return 0
+
+        echo "attempting to kill process..."
+        kill $pid
+        if [ $? -eq 0 ]; then
+            echo "QEMU process killed"
+        else
+            echo "Failed to kill QEMU process with PID ${pid}"
+        fi
+    else
+        echo "process does not exist, skipping..."
+    fi
+}
+% @end
