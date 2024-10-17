@@ -36,6 +36,12 @@ local function table_copy (t)
 end
 
 
+local function render_executable(tpl, fpath, conf)
+	render(tpl, fpath, conf)
+	os.execute(string.format([[chmod +x "%s"]], fpath))
+end
+
+
 local cwd = htt.fs.cwd()
 local cwdAbsPath = cwd:path()
 
@@ -63,12 +69,12 @@ render(tpls.Config, ssh_conf_fpath, {
 })
 
 local ssh_bin_fpath = htt.fs.path_join(out, "ssh")
-render(tpls.BinWrap, ssh_bin_fpath, {
+render_executable(tpls.BinWrap, ssh_bin_fpath, {
 	bin = "ssh",
 	conf_fpath = ssh_conf_fpath,
 })
 
-render(tpls.BinWrap, htt.fs.path_join(out, "scp"), {
+render_executable(tpls.BinWrap, htt.fs.path_join(out, "scp"), {
 	bin = "scp",
 	conf_fpath = ssh_conf_fpath,
 })
@@ -79,11 +85,10 @@ render(tpls.BinWrap, htt.fs.path_join(out, "scp"), {
 local ssh_conf_rel_fpath = htt.fs.path_join(
 	"data", "ssh", "ssh-conf"
 )
-render(tpls.QcmdrScript, htt.fs.path_join(out, "qcmdr"), {
+
+render_executable(tpls.QcmdrScript, htt.fs.path_join(out, "qcmdr"), {
 	ssh_conf_fpath = ssh_conf_rel_fpath,
-
 })
-
 
 -- Mutagen
 -----------------------------------
@@ -91,7 +96,7 @@ render(tpls.QcmdrScript, htt.fs.path_join(out, "qcmdr"), {
 local mutagen_data_dir_relpath = htt.fs.path_join("data", "mutagen")
 cwd:makePath(mutagen_data_dir_relpath)
 
-render(tpls.MutagenBinWrap, htt.fs.path_join(out, "mutagen"), {
+render_executable(tpls.MutagenBinWrap, htt.fs.path_join(out, "mutagen"), {
 	ssh_bin_fpath = "ssh",
 	data_dir_fpath = mutagen_data_dir_relpath,
 })

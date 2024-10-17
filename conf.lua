@@ -98,7 +98,7 @@ M.ssh_conf_base = {
 	ServerAliveCountMax = 3,
 	PubkeyAcceptedKeyTypes = "+ssh-rsa",
 	HostKeyAlgorithms = "+ssh-rsa",
-	User = "root",
+	-- Oddly, if I set 'User = root' in the 'Host *' section, that overrides the specific host section.
 	StrictHostKeyChecking = "no",
 	UserKnownHostsFile = "/dev/null",
 }
@@ -187,6 +187,7 @@ local valid_vm_config = htt.is.table_with({
 		htt.is.table_with({
 			Port = htt.is.number,
 			IdentityFile = htt.is.string,
+			User = htt.is.string,
 		}),
 		htt.is.table_of(
 			htt.is.string,

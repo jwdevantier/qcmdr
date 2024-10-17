@@ -7,7 +7,8 @@ $( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 SCRIPT_DIR={{@ ScriptDirVal {} }}
 
 export MUTAGEN_DATA_DIRECTORY="${SCRIPT_DIR}/{{ctx.data_dir_fpath}}"
-export MUTAGEN_SSH_PATH="${SCRIPT_DIR}/{{ctx.ssh_bin_fpath}}"
+% -- expects the dir in which `ssh` and `scp` may be found
+export MUTAGEN_SSH_PATH="${SCRIPT_DIR}"
 exec mutagen $*
 % @end
 
@@ -117,7 +118,7 @@ ssh_shutdown() {
 
   echo "Sending 'poweroff' to ${host}..."
   timeout 12s ssh -F "${SSH_CONF_FPATH}" -o BatchMode=yes -o ConnectTimeout=10 "$host" poweroff
-  if [[ $? -ne 255 ]] && [[$? -ne 0 ]]; then
+  if [[ $? -ne 255 ]] && [[ $? -ne 0 ]]; then
       echo "SSH poweroff request failed, $?"
       return 2
   fi
@@ -309,6 +310,13 @@ vm_{{ctx.name}}_start () {
     # Check for login prompt
     check_login "{{ctx.serial_fpath}}" {{ctx.login_timeout or 120}}
 
+    echo "attempting to connect via SSH..."
+    timeout 12s ssh -F {{ctx.ssh_conf_fpath}} -o BatchMode=yes -o ConnectTimeout=10 {{ctx.name}} true
+    if [ $? -ne 0 ]; then
+        echo "failed to connect via SSH, shutting down..."
+        return 2
+    fi
+
     % if ctx.sync_enable then
     $MUTAGEN sync terminate --label-selector "{{ctx.name}}"
 
@@ -327,7 +335,7 @@ vm_{{ctx.name}}_start () {
       ignore_vcs = " --ignore-vcs"
     end
     % @end
-    $MUTAGEN sync create -m one-way-replica --label "{{ctx.name}}" "{{sync.source}}" "{{sync.dest}}"{{ignore}}{{ignore_vcs}}
+    $MUTAGEN sync create -m one-way-replica --label "{{ctx.name}}" "{{sync.source}}" "{{ctx.name}}:{{sync.dest}}"{{ignore}}{{ignore_vcs}}
     if [[ $? -ne 0 ]]; then
         echo "failed to sync \"{{sync.source}}\", aborting!"
         vm_{{ctx.name}}_stop
