@@ -152,6 +152,29 @@ table.insert(M.vms, {
 	}
 })
 
+table.insert(M.vms, {
+	name = "loremail",
+	arch = "x86_64",
+	login_timeout = 15,
+	ssh = {
+		IdentityFile = "~/.ssh/id_rsa",
+		Port = 3022,
+		User = "mailuser",
+	},
+	args = {
+		amd64Base { cores = 1, mem = 1024 },
+		virtioNet {
+			id = "net0",
+			fwd = {
+				{ host = 3022, vm = 22 },
+				{ host = 3143, vm = 143 },
+			},
+		},
+		"-display", '"none"',
+		"-drive", "id=boot,file=/home/jwd/repos/nix-machines/os.img,format=qcow2,if=virtio,discard=unmap,media=disk",
+	},
+})
+
 -- Domain Model Validation
 --------------------------
 -- This validates that the configuration (the model) adheres to
