@@ -113,6 +113,7 @@ table.insert(M.vms, {
 	ssh = {
 		IdentityFile = "~/.ssh/id_rsa",
 		Port = 2089,
+		User = "root",
 	},
 	sync = {
 		{
@@ -144,7 +145,7 @@ table.insert(M.vms, {
 		"-device", "nvme,id=nvme0,serial=deadbeef,bus=pcie_port0,subsys=nvme-subsys0,mdts=7",
 		-- add CTRL 1 (Adm ctrl)
 		"-device", "pcie-root-port,id=pcie_port1,chassis=1,slot=1",
-		"-device", "nvme,id=nvme1,serial=deadbeef,bus=pcie_port1,subsys=nvme-subsys0,mdts=7", -- ,hmlms=on
+		"-device", "nvme,id=nvme1,serial=deadbeef,bus=pcie_port1,subsys=nvme-subsys0,mdts=7,hmlms=on",
 		"-drive", "id=nvm,file=/home/jwd/repos/nix/nvmetestvm/nvm_tst.img,format=raw,if=none,discard=unmap,media=disk",
 		-- plug NVM NS into nvme0 (first ctrl)
 		"-device", "nvme-ns,id=nvm,drive=nvm,bus=nvme0,nsid=1,logical_block_size=4096,physical_block_size=4096",
